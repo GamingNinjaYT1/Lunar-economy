@@ -396,6 +396,7 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
+async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /bet <amount> <1-6> — uses Telegram dice emoji """
     if not await spam_guard(update, context):
         return
@@ -968,6 +969,23 @@ async def cmd_resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
     await update.message.reply_text(f"♻️ Reset {target.first_name}'s data.")
+
+@admin_only
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return
+    text = " ".join(context.args)
+    conn = db()
+    ids = [r["user_id"] for r in conn.execute("SELECT user_id FROM users").fetchall()]
+    conn.close()
+    sent = 0
+    for uid in ids:
+        try:
+            await context.bot.send_message(uid, f"📢 {text}")
+            sent += 1
+        except Exception:
+            pass
+    await update.message.reply_text(f"✅ Broadcast sent to {sent} users.")
 
 @admin_only
 async def cmd_spamtoggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
