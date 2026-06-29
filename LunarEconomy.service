@@ -1,0 +1,16 @@
+[Unit]
+Description=LunarEconomy Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=REPLACE_WITH_YOUR_VPS_USERNAME
+WorkingDirectory=/home/REPLACE_WITH_YOUR_VPS_USERNAME/lunareconomy
+Environment=BOT_TOKEN=PUT_YOUR_BOTFATHER_TOKEN_HERE
+Environment=ADMIN_IDS=7140576750
+ExecStart=/home/REPLACE_WITH_YOUR_VPS_USERNAME/lunareconomy/venv/bin/python3 bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
