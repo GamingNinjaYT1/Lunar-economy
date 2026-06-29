@@ -1089,6 +1089,16 @@ async def cmd_start_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
+async def error_handler(update, context):
+    log.error("Exception while handling update:", exc_info=context.error)
+    try:
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text(
+                "⚠️ Something went wrong running that command. The error has been logged."
+            )
+    except Exception:
+        pass
+
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "PUT_YOUR_TOKEN_HERE":
         raise SystemExit(
@@ -1096,7 +1106,14 @@ def main():
             "(see LunarEconomy.service) or edit bot.py directly."
         )
     init_db()
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .connect_timeout(30)
+        .read_timeout(30)
+        .get_updates_read_timeout(30)
+        .build()
+    )
 
     app.add_handler(CommandHandler(["start", "help"], cmd_start_help))
     app.add_handler(CommandHandler("daily", cmd_daily))
@@ -1149,6 +1166,8 @@ def main():
     app.add_handler(CommandHandler("spamtoggle", cmd_spamtoggle))
     app.add_handler(CommandHandler("spamset", cmd_spamset))
     app.add_handler(CommandHandler("spamstatus", cmd_spamstatus))
+
+    app.add_error_handler(error_handler)
 
     log.info("Bot starting...")
     app.run_polling()
