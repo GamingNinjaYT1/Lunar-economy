@@ -142,6 +142,7 @@ def clear_marriage(user_id):
     conn.close()
 
 
+def update_balance(user_id, delta):
     conn = db()
     conn.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (delta, user_id))
     conn.commit()
