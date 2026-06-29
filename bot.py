@@ -201,8 +201,7 @@ async def antispam_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             log.warning(f"Could not mute {user.id}: {e}")
         await update.message.reply_text(
-            f"🚫 {user.first_name} spamming detected — muted for {mute_secs}s."
-        )
+            f"🚫 {user.first_name} spamming detected — muted for {mute_secs}s.", quote=True)
         return False
     return True
 
@@ -238,7 +237,7 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if now - row["last_daily"] < 86400:
         remaining = 86400 - (now - row["last_daily"])
         h, m = remaining // 3600, (remaining % 3600) // 60
-        await update.message.reply_text(f"⏳ Already claimed. Try again in {h}h {m}m.")
+        await update.message.reply_text(f"⏳ Already claimed. Try again in {h}h {m}m.", quote=True)
         return
     # streak resets if more than 48h since last claim, otherwise increments
     if now - row["last_daily"] <= 172800 and row["last_daily"] != 0:
@@ -252,8 +251,7 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_field(u.id, "streak", streak)
     await update.message.reply_text(
         f"💰 +${total} daily coins claimed! (base ${DAILY_AMOUNT} + streak bonus ${bonus})\n"
-        f"🔥 Streak: {streak} day{'s' if streak != 1 else ''}"
-    )
+        f"🔥 Streak: {streak} day{'s' if streak != 1 else ''}", quote=True)
 
 async def cmd_bal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -266,8 +264,7 @@ async def cmd_bal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ).fetchone()
     conn.close()
     await update.message.reply_text(
-        f"👤 {target_user.first_name}\n💰 Balance: ${row['balance']}\n🏆 Rank: #{rank_row['rank']}"
-    )
+        f"👤 {target_user.first_name}\n💰 Balance: ${row['balance']}\n🏆 Rank: #{rank_row['rank']}", quote=True)
 
 async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -275,15 +272,15 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     target = await get_target(update)
     if not target:
-        await update.message.reply_text("↩️ Reply to the user you want to give coins to.")
+        await update.message.reply_text("↩️ Reply to the user you want to give coins to.", quote=True)
         return
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("ℹ️ Usage: /give (reply) <amount>")
+        await update.message.reply_text("ℹ️ Usage: /give (reply) <amount>", quote=True)
         return
     amount = int(context.args[0])
     row = get_user(u.id, u.username)
     if amount <= 0 or row["balance"] < amount:
-        await update.message.reply_text("❌ Insufficient balance.")
+        await update.message.reply_text("❌ Insufficient balance.", quote=True)
         return
     tax = int(amount * GIFT_TAX)
     net = amount - tax
@@ -291,8 +288,7 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_balance(u.id, -amount)
     update_balance(target.id, net)
     await update.message.reply_text(
-        f"🎁 {u.first_name} gifted ${net} to {target.first_name} (tax: ${tax})"
-    )
+        f"🎁 {u.first_name} gifted ${net} to {target.first_name} (tax: ${tax})", quote=True)
 
 # ---------------------------------------------------------------------------
 # GAMES — using Telegram's real emoji dice (send_dice) for provably-visible RNG
@@ -324,12 +320,12 @@ async def cmd_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if now - row["last_work"] < WORK_COOLDOWN:
         remaining = WORK_COOLDOWN - (now - row["last_work"])
         m, s = remaining // 60, remaining % 60
-        await update.message.reply_text(f"⏳ Tired from last job. Rest {m}m {s}s more.")
+        await update.message.reply_text(f"⏳ Tired from last job. Rest {m}m {s}s more.", quote=True)
         return
     earned = random.randint(WORK_MIN, WORK_MAX)
     update_balance(u.id, earned)
     set_field(u.id, "last_work", now)
-    await update.message.reply_text(f"🛠️ You {random.choice(WORK_LINES)} and earned ${earned}!")
+    await update.message.reply_text(f"🛠️ You {random.choice(WORK_LINES)} and earned ${earned}!", quote=True)
 
 async def cmd_shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -337,7 +333,7 @@ async def cmd_shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["🛒 Lunar Shop:"]
     for key, item in SHOP_ITEMS.items():
         lines.append(f"• {item['label']} — ${item['price']}  (/buy {key})")
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\n".join(lines), quote=True)
 
 async def cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -345,21 +341,21 @@ async def cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     row = get_user(u.id, u.username)
     if not context.args or context.args[0].lower() not in SHOP_ITEMS:
-        await update.message.reply_text("ℹ️ Usage: /buy <item_key>. See /shop for options.")
+        await update.message.reply_text("ℹ️ Usage: /buy <item_key>. See /shop for options.", quote=True)
         return
     key = context.args[0].lower()
     item = SHOP_ITEMS[key]
     if row["balance"] < item["price"]:
-        await update.message.reply_text("❌ Not enough coins.")
+        await update.message.reply_text("❌ Not enough coins.", quote=True)
         return
     inv = set(row["inventory"].split(",")) if row["inventory"] else set()
     if key in inv:
-        await update.message.reply_text("📦 You already own this.")
+        await update.message.reply_text("📦 You already own this.", quote=True)
         return
     inv.add(key)
     update_balance(u.id, -item["price"])
     set_field(u.id, "inventory", ",".join(inv))
-    await update.message.reply_text(f"✅ Purchased {item['label']}! Use /settitle {key} to equip a title item.")
+    await update.message.reply_text(f"✅ Purchased {item['label']}! Use /settitle {key} to equip a title item.", quote=True)
 
 async def cmd_settitle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -368,15 +364,15 @@ async def cmd_settitle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = get_user(u.id, u.username)
     if not context.args:
         set_field(u.id, "title", "")
-        await update.message.reply_text("🧹 Title cleared.")
+        await update.message.reply_text("🧹 Title cleared.", quote=True)
         return
     key = context.args[0].lower()
     inv = set(row["inventory"].split(",")) if row["inventory"] else set()
     if key not in inv or key not in SHOP_ITEMS:
-        await update.message.reply_text("🚫 You don't own that item.")
+        await update.message.reply_text("🚫 You don't own that item.", quote=True)
         return
     set_field(u.id, "title", SHOP_ITEMS[key]["label"])
-    await update.message.reply_text(f"✅ Title equipped: {SHOP_ITEMS[key]['label']}")
+    await update.message.reply_text(f"✅ Title equipped: {SHOP_ITEMS[key]['label']}", quote=True)
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -394,7 +390,21 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💞 Married to: {m['partner_name'] if m else 'Nobody'}\n"
         f"🎒 Inventory: {', '.join(inv_labels) if inv_labels else 'Empty'}"
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, quote=True)
+
+
+WIN_HEADERS = ["💸 SAHI! YOU WON! 💸", "🔥 JEET GAYE! 🔥", "🎉 BOOM! WINNER! 🎉", "💰 MAAL MIL GAYA! 💰"]
+LOSE_HEADERS = ["💀 GALAT! HAARA! 💀", "😵 BURA LUCK! 😵", "📉 NUKSAN HO GAYA! 📉", "🥀 KHO GAYA! 🥀"]
+DIVIDER = "━━━━━━━━━━━━━━━━━━━━━"
+
+def game_result_msg(won: bool, lines: list, amount: int, win: int = 0):
+    header = random.choice(WIN_HEADERS if won else LOSE_HEADERS)
+    body = "\n".join(lines)
+    if won:
+        footer = f"🤑 Jeet: +${win}\nLucky ho Gaming! 🍀🔥"
+    else:
+        footer = f"😔 Nuksan: -${amount}\nAgli baar sahi lagana Gaming! 💸"
+    return f"{header}\n{DIVIDER}\n{body}\n\n{footer}"
 
 
 async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -404,24 +414,28 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     row = get_user(u.id, u.username)
     if len(context.args) < 2 or not context.args[0].isdigit() or not context.args[1].isdigit():
-        await update.message.reply_text("ℹ️ Usage: /bet <amount> <1-6>")
+        await update.message.reply_text("ℹ️ Usage: /bet <amount> <1-6>", quote=True)
         return
     amount, guess = int(context.args[0]), int(context.args[1])
     if guess < 1 or guess > 6:
-        await update.message.reply_text("🎲 Pick a number 1-6.")
+        await update.message.reply_text("🎲 Pick a number 1-6.", quote=True)
         return
     if amount <= 0 or row["balance"] < amount:
-        await update.message.reply_text("❌ Insufficient balance.")
+        await update.message.reply_text("❌ Insufficient balance.", quote=True)
         return
     update_balance(u.id, -amount)
-    dice_msg = await update.message.reply_dice(emoji=DiceEmoji.DICE)
+    dice_msg = await update.message.reply_dice(emoji=DiceEmoji.DICE, quote=True)
     result = dice_msg.dice.value
     if result == guess:
         win = amount * 5
         update_balance(u.id, win)
-        await update.message.reply_text(f"🎲 Rolled {result}! You WON ${win} (5x)!")
+        await update.message.reply_text(game_result_msg(
+            True, [f"🎲 Result: {result}", f"✅ Tera pick: {guess}"], amount, win
+        ), quote=True)
     else:
-        await update.message.reply_text(f"🎲 Rolled {result}. You lost ${amount}.")
+        await update.message.reply_text(game_result_msg(
+            False, [f"🎲 Result: {result}", f"❌ Tera pick: {guess}"], amount
+        ), quote=True)
 
 async def cmd_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /slots <amount> — uses Telegram slot machine emoji """
@@ -430,58 +444,71 @@ async def cmd_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     row = get_user(u.id, u.username)
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("ℹ️ Usage: /slots <amount>")
+        await update.message.reply_text("ℹ️ Usage: /slots <amount>", quote=True)
         return
     amount = int(context.args[0])
     if amount <= 0 or row["balance"] < amount:
-        await update.message.reply_text("❌ Insufficient balance.")
+        await update.message.reply_text("❌ Insufficient balance.", quote=True)
         return
     update_balance(u.id, -amount)
-    dice_msg = await update.message.reply_dice(emoji=DiceEmoji.SLOT_MACHINE)
+    dice_msg = await update.message.reply_dice(emoji=DiceEmoji.SLOT_MACHINE, quote=True)
     value = dice_msg.dice.value  # 1-64, 64 = jackpot (777)
     if value == 64:
         win = amount * 10
         update_balance(u.id, win)
-        await update.message.reply_text(f"🎰 JACKPOT 777! You won ${win} (10x)!")
+        await update.message.reply_text(game_result_msg(
+            True, ["🎰 777 — JACKPOT!"], amount, win
+        ), quote=True)
     elif value in (1, 22, 43):  # any matching triple (bar/grape/lemon triples in TG's table)
         win = amount * 3
         update_balance(u.id, win)
-        await update.message.reply_text(f"🎰 Triple match! You won ${win} (3x)!")
+        await update.message.reply_text(game_result_msg(
+            True, ["🎰 Triple Match!"], amount, win
+        ), quote=True)
     else:
-        await update.message.reply_text(f"🎰 No match. You lost ${amount}.")
+        await update.message.reply_text(game_result_msg(
+            False, ["🎰 No match."], amount
+        ), quote=True)
 
 async def cmd_flip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /flip <amount> <h/t> — uses Telegram's basketball emoji dice.
-        Telegram's basketball returns 1-5: values 4-5 = "scored" (mapped to heads),
-        values 1-3 = "missed" (mapped to tails). Note this isn't a perfect 50/50
-        split (scoring is slightly less likely than missing), but it's driven
-        entirely by Telegram's own animation/result, same as the other games. """
+        Telegram's basketball returns 1-5: values 4-5 = "scored" (mapped to TAILS,
+        ball goes IN the basket), values 1-3 = "missed" (mapped to HEADS).
+        Not a perfect 50/50 split (scoring is slightly less likely than missing),
+        but driven entirely by Telegram's own animation/result. """
     if not await spam_guard(update, context):
         return
     u = update.effective_user
     row = get_user(u.id, u.username)
     if len(context.args) < 2 or not context.args[0].isdigit():
-        await update.message.reply_text("ℹ️ Usage: /flip <amount> <h/t>")
+        await update.message.reply_text("ℹ️ Usage: /flip <amount> <h/t>", quote=True)
         return
     amount = int(context.args[0])
     pick = context.args[1].lower()
     if pick not in ("h", "t", "heads", "tails"):
-        await update.message.reply_text("🪙 Pick must be h or t.")
+        await update.message.reply_text("🪙 Pick must be h or t.", quote=True)
         return
     pick = "heads" if pick.startswith("h") else "tails"
     if amount <= 0 or row["balance"] < amount:
-        await update.message.reply_text("❌ Insufficient balance.")
+        await update.message.reply_text("❌ Insufficient balance.", quote=True)
         return
     update_balance(u.id, -amount)
-    dice_msg = await update.message.reply_dice(emoji=DiceEmoji.BASKETBALL)
-    # Basketball value: 4-5 = scored -> heads, 1-3 = missed -> tails
-    result = "heads" if dice_msg.dice.value >= 4 else "tails"
+    dice_msg = await update.message.reply_dice(emoji=DiceEmoji.BASKETBALL, quote=True)
+    # Basketball value: 4-5 = scored (ball IN basket) -> tails, 1-3 = missed -> heads
+    scored = dice_msg.dice.value >= 4
+    result = "tails" if scored else "heads"
+    result_emoji = "⚫ Tails" if result == "tails" else "🟡 Heads"
+    pick_emoji = "⚫ Tails" if pick == "tails" else "🟡 Heads"
     if result == pick:
         win = amount * 2
         update_balance(u.id, win)
-        await update.message.reply_text(f"🏀 {'Scored' if result=='heads' else 'Missed'} ({result.upper()}) — You WON ${win} (2x)!")
+        await update.message.reply_text(game_result_msg(
+            True, [f"🏀 Result: {result_emoji}", f"✅ Tera pick: {pick_emoji}"], amount, win
+        ), quote=True)
     else:
-        await update.message.reply_text(f"🏀 {'Scored' if result=='heads' else 'Missed'} ({result.upper()}) — You lost ${amount}.")
+        await update.message.reply_text(game_result_msg(
+            False, [f"🏀 Result: {result_emoji}", f"❌ Tera pick: {pick_emoji}"], amount
+        ), quote=True)
 
 async def cmd_roulette(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /roulette <amount> — uses Telegram dart emoji, bullseye = 35x """
@@ -490,21 +517,25 @@ async def cmd_roulette(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     row = get_user(u.id, u.username)
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("ℹ️ Usage: /roulette <amount>")
+        await update.message.reply_text("ℹ️ Usage: /roulette <amount>", quote=True)
         return
     amount = int(context.args[0])
     if amount <= 0 or row["balance"] < amount:
-        await update.message.reply_text("❌ Insufficient balance.")
+        await update.message.reply_text("❌ Insufficient balance.", quote=True)
         return
     update_balance(u.id, -amount)
-    dice_msg = await update.message.reply_dice(emoji=DiceEmoji.DARTS)
+    dice_msg = await update.message.reply_dice(emoji=DiceEmoji.DARTS, quote=True)
     value = dice_msg.dice.value  # 6 = bullseye
     if value == 6:
         win = amount * 35
         update_balance(u.id, win)
-        await update.message.reply_text(f"🎯 BULLSEYE! You won ${win} (35x)!")
+        await update.message.reply_text(game_result_msg(
+            True, ["🎯 BULLSEYE!"], amount, win
+        ), quote=True)
     else:
-        await update.message.reply_text(f"🎯 Missed center. You lost ${amount}.")
+        await update.message.reply_text(game_result_msg(
+            False, ["🎯 Missed center."], amount
+        ), quote=True)
 
 async def cmd_color(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /c <amount> — uses Telegram bowling emoji mapped to 4 colors """
@@ -513,28 +544,32 @@ async def cmd_color(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     row = get_user(u.id, u.username)
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("ℹ️ Usage: /c <amount> then pick a color when prompted: red/green/blue/gold")
+        await update.message.reply_text("ℹ️ Usage: /c <amount> then pick a color when prompted: red/green/blue/gold", quote=True)
         return
     amount = int(context.args[0])
     colors = ["🔴 red", "🟢 green", "🔵 blue", "🟡 gold"]
     if len(context.args) >= 2 and context.args[1].lower() in ("red", "green", "blue", "gold"):
         pick = context.args[1].lower()
     else:
-        await update.message.reply_text("ℹ️ Usage: /c <amount> <red|green|blue|gold>")
+        await update.message.reply_text("ℹ️ Usage: /c <amount> <red|green|blue|gold>", quote=True)
         return
     if amount <= 0 or row["balance"] < amount:
-        await update.message.reply_text("❌ Insufficient balance.")
+        await update.message.reply_text("❌ Insufficient balance.", quote=True)
         return
     update_balance(u.id, -amount)
-    dice_msg = await update.message.reply_dice(emoji=DiceEmoji.BOWLING)
+    dice_msg = await update.message.reply_dice(emoji=DiceEmoji.BOWLING, quote=True)
     value = dice_msg.dice.value  # 1-6
     mapped = ["red", "green", "blue", "gold"][value % 4]
     if mapped == pick:
         win = amount * 4
         update_balance(u.id, win)
-        await update.message.reply_text(f"🎨 Landed on {mapped.upper()}! You won ${win} (4x)!")
+        await update.message.reply_text(game_result_msg(
+            True, [f"🎨 Result: {mapped.upper()}", f"✅ Tera pick: {pick.upper()}"], amount, win
+        ), quote=True)
     else:
-        await update.message.reply_text(f"🎨 Landed on {mapped.upper()}. You lost ${amount}.")
+        await update.message.reply_text(game_result_msg(
+            False, [f"🎨 Result: {mapped.upper()}", f"❌ Tera pick: {pick.upper()}"], amount
+        ), quote=True)
 
 # ---------------------------------------------------------------------------
 # PLAYER INTERACTION COMMANDS
@@ -545,16 +580,16 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     target = await get_target(update)
     if not target:
-        await update.message.reply_text("↩️ Reply to the user you want to kill.")
+        await update.message.reply_text("↩️ Reply to the user you want to kill.", quote=True)
         return
     trow = get_user(target.id, target.username)
     if is_protected(trow):
-        await update.message.reply_text(f"🛡️ {target.first_name} is protected!")
+        await update.message.reply_text(f"🛡️ {target.first_name} is protected!", quote=True)
         return
     until = int(time.time()) + KILL_HOURS * 3600
     set_field(target.id, "dead_until", until)
     set_field(u.id, "kills", get_user(u.id)["kills"] + 1)
-    await update.message.reply_text(f"💀 {target.first_name} has been killed for {KILL_HOURS}h!")
+    await update.message.reply_text(f"💀 {target.first_name} has been killed for {KILL_HOURS}h!", quote=True)
 
 async def cmd_revive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -562,15 +597,15 @@ async def cmd_revive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     target = await get_target(update)
     if not target:
-        await update.message.reply_text("↩️ Reply to the dead user you want to revive.")
+        await update.message.reply_text("↩️ Reply to the dead user you want to revive.", quote=True)
         return
     row = get_user(u.id, u.username)
     if row["balance"] < REVIVE_COST:
-        await update.message.reply_text(f"❌ Revive costs ${REVIVE_COST}.")
+        await update.message.reply_text(f"❌ Revive costs ${REVIVE_COST}.", quote=True)
         return
     update_balance(u.id, -REVIVE_COST)
     set_field(target.id, "dead_until", 0)
-    await update.message.reply_text(f"❤️ {target.first_name} has been revived by {u.first_name}!")
+    await update.message.reply_text(f"❤️ {target.first_name} has been revived by {u.first_name}!", quote=True)
 
 async def cmd_rob(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -578,19 +613,19 @@ async def cmd_rob(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     target = await get_target(update)
     if not target:
-        await update.message.reply_text("↩️ Reply to the user you want to rob.")
+        await update.message.reply_text("↩️ Reply to the user you want to rob.", quote=True)
         return
     trow = get_user(target.id, target.username)
     if is_protected(trow):
-        await update.message.reply_text(f"🛡️ {target.first_name} is protected!")
+        await update.message.reply_text(f"🛡️ {target.first_name} is protected!", quote=True)
         return
     if trow["balance"] <= 0:
-        await update.message.reply_text("🤷 They have nothing to steal.")
+        await update.message.reply_text("🤷 They have nothing to steal.", quote=True)
         return
     stolen = int(trow["balance"] * ROB_PERCENT)
     update_balance(target.id, -stolen)
     update_balance(u.id, stolen)
-    await update.message.reply_text(f"🥷 {u.first_name} robbed ${stolen} from {target.first_name}!")
+    await update.message.reply_text(f"🥷 {u.first_name} robbed ${stolen} from {target.first_name}!", quote=True)
 
 async def cmd_protect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -598,7 +633,7 @@ async def cmd_protect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     until = int(time.time()) + PROTECT_HOURS * 3600
     set_field(u.id, "protected_until", until)
-    await update.message.reply_text(f"🛡️ You are protected for {PROTECT_HOURS}h!")
+    await update.message.reply_text(f"🛡️ You are protected for {PROTECT_HOURS}h!", quote=True)
 
 async def cmd_duel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /duel <amount> (reply) — both wager, dice decides winner """
@@ -607,21 +642,21 @@ async def cmd_duel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     target = await get_target(update)
     if not target:
-        await update.message.reply_text("↩️ Reply to the user you want to duel.")
+        await update.message.reply_text("↩️ Reply to the user you want to duel.", quote=True)
         return
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("ℹ️ Usage: /duel <amount> (reply to opponent)")
+        await update.message.reply_text("ℹ️ Usage: /duel <amount> (reply to opponent)", quote=True)
         return
     amount = int(context.args[0])
     urow, trow = get_user(u.id, u.username), get_user(target.id, target.username)
     if urow["balance"] < amount or trow["balance"] < amount:
-        await update.message.reply_text("❌ One of you doesn't have enough coins.")
+        await update.message.reply_text("❌ One of you doesn't have enough coins.", quote=True)
         return
-    dice1 = await update.message.reply_dice(emoji=DiceEmoji.DICE)
-    dice2 = await update.message.reply_dice(emoji=DiceEmoji.DICE)
+    dice1 = await update.message.reply_dice(emoji=DiceEmoji.DICE, quote=True)
+    dice2 = await update.message.reply_dice(emoji=DiceEmoji.DICE, quote=True)
     v1, v2 = dice1.dice.value, dice2.dice.value
     if v1 == v2:
-        await update.message.reply_text(f"🎲 Tie ({v1} - {v2})! No coins exchanged.")
+        await update.message.reply_text(f"🎲 Tie ({v1} - {v2})! No coins exchanged.", quote=True)
         return
     if v1 > v2:
         winner, loser = u, target
@@ -630,8 +665,7 @@ async def cmd_duel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_balance(winner.id, amount)
     update_balance(loser.id, -amount)
     await update.message.reply_text(
-        f"⚔️ {u.first_name} ({v1}) vs {target.first_name} ({v2})\n🏆 {winner.first_name} wins ${amount}!"
-    )
+        f"⚔️ {u.first_name} ({v1}) vs {target.first_name} ({v2})\n🏆 {winner.first_name} wins ${amount}!", quote=True)
 
 # ---------------------------------------------------------------------------
 # LEADERBOARD
@@ -645,20 +679,20 @@ async def cmd_rps(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     target = await get_target(update)
     if not target:
-        await update.message.reply_text("↩️ Reply to the user you want to challenge.")
+        await update.message.reply_text("↩️ Reply to the user you want to challenge.", quote=True)
         return
     if len(context.args) < 2 or not context.args[0].isdigit():
-        await update.message.reply_text("ℹ️ Usage: /rps <amount> <rock|paper|scissors> (reply to opponent)")
+        await update.message.reply_text("ℹ️ Usage: /rps <amount> <rock|paper|scissors> (reply to opponent)", quote=True)
         return
     amount = int(context.args[0])
     pick = context.args[1].lower()
     choices = ("rock", "paper", "scissors")
     if pick not in choices:
-        await update.message.reply_text("✊✋✌️ Choose rock, paper, or scissors.")
+        await update.message.reply_text("✊✋✌️ Choose rock, paper, or scissors.", quote=True)
         return
     urow, trow = get_user(u.id, u.username), get_user(target.id, target.username)
     if urow["balance"] < amount or trow["balance"] < amount:
-        await update.message.reply_text("❌ One of you doesn't have enough coins.")
+        await update.message.reply_text("❌ One of you doesn't have enough coins.", quote=True)
         return
     opp_pick = random.choice(choices)
     beats = {"rock": "scissors", "paper": "rock", "scissors": "paper"}
@@ -672,7 +706,7 @@ async def cmd_rps(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update_balance(target.id, amount)
         update_balance(u.id, -amount)
         result = f"✊✋✌️ {target.first_name} ({opp_pick}) beats {u.first_name} ({pick})! +${amount} for {target.first_name}"
-    await update.message.reply_text(result)
+    await update.message.reply_text(result, quote=True)
 
 async def cmd_slap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ cosmetic-only player interaction, no coins involved """
@@ -681,12 +715,11 @@ async def cmd_slap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     target = await get_target(update)
     if not target:
-        await update.message.reply_text("↩️ Reply to the user you want to slap.")
+        await update.message.reply_text("↩️ Reply to the user you want to slap.", quote=True)
         return
     slaps = ["👋💥", "🖐️💢", "✋😵"]
     await update.message.reply_text(
-        f"{u.first_name} slaps {target.first_name}! {random.choice(slaps)}"
-    )
+        f"{u.first_name} slaps {target.first_name}! {random.choice(slaps)}", quote=True)
 
 async def cmd_hug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ cosmetic-only player interaction, no coins involved """
@@ -695,9 +728,9 @@ async def cmd_hug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     target = await get_target(update)
     if not target:
-        await update.message.reply_text("↩️ Reply to the user you want to hug.")
+        await update.message.reply_text("↩️ Reply to the user you want to hug.", quote=True)
         return
-    await update.message.reply_text(f"🤗 {u.first_name} hugs {target.first_name} warmly!")
+    await update.message.reply_text(f"🤗 {u.first_name} hugs {target.first_name} warmly!", quote=True)
 
 
     if not await spam_guard(update, context):
@@ -708,7 +741,7 @@ async def cmd_hug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "💰 Top 10 Richest:\n" + "\n".join(
         f"{i+1}. {r['username'] or 'Unknown'} — ${r['balance']}" for i, r in enumerate(rows)
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, quote=True)
 
 async def cmd_lottery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /lottery <amount> — join the pool; run /drawlottery once 2+ players joined """
@@ -717,24 +750,23 @@ async def cmd_lottery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     row = get_user(u.id, u.username)
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("ℹ️ Usage: /lottery <amount>")
+        await update.message.reply_text("ℹ️ Usage: /lottery <amount>", quote=True)
         return
     amount = int(context.args[0])
     if amount <= 0 or row["balance"] < amount:
-        await update.message.reply_text("❌ Insufficient balance.")
+        await update.message.reply_text("❌ Insufficient balance.", quote=True)
         return
     chat_id = update.effective_chat.id
     pool = _lottery_pools.setdefault(chat_id, [])
     if any(p[0] == u.id for p in pool):
-        await update.message.reply_text("🎟️ You already joined this round.")
+        await update.message.reply_text("🎟️ You already joined this round.", quote=True)
         return
     update_balance(u.id, -amount)
     pool.append((u.id, u.first_name, amount))
     await update.message.reply_text(
         f"🎟️ {u.first_name} joined the lottery with ${amount}! "
         f"Pool: {len(pool)} player(s), total ${sum(p[2] for p in pool)}.\n"
-        f"Run /drawlottery anytime with 2+ players to draw a winner."
-    )
+        f"Run /drawlottery anytime with 2+ players to draw a winner.", quote=True)
 
 async def cmd_drawlottery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -742,7 +774,7 @@ async def cmd_drawlottery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     pool = _lottery_pools.get(chat_id, [])
     if len(pool) < 2:
-        await update.message.reply_text("⏳ Need at least 2 players in the pool. Use /lottery <amount> to join.")
+        await update.message.reply_text("⏳ Need at least 2 players in the pool. Use /lottery <amount> to join.", quote=True)
         return
     total = sum(p[2] for p in pool)
     winner_id, winner_name, _ = random.choice(pool)
@@ -750,8 +782,7 @@ async def cmd_drawlottery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _lottery_pools[chat_id] = []
     names = ", ".join(p[1] for p in pool)
     await update.message.reply_text(
-        f"🎉 Lottery draw! Players: {names}\n🏆 Winner: {winner_name} takes the pot of ${total}!"
-    )
+        f"🎉 Lottery draw! Players: {names}\n🏆 Winner: {winner_name} takes the pot of ${total}!", quote=True)
 
 async def cmd_scratch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /scratch <amount> — instant scratch card, match all 3 symbols to win """
@@ -760,11 +791,11 @@ async def cmd_scratch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     row = get_user(u.id, u.username)
     if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("ℹ️ Usage: /scratch <amount>")
+        await update.message.reply_text("ℹ️ Usage: /scratch <amount>", quote=True)
         return
     amount = int(context.args[0])
     if amount <= 0 or row["balance"] < amount:
-        await update.message.reply_text("❌ Insufficient balance.")
+        await update.message.reply_text("❌ Insufficient balance.", quote=True)
         return
     update_balance(u.id, -amount)
     symbols = ["🍒", "🍋", "⭐", "💎", "🔔"]
@@ -775,9 +806,13 @@ async def cmd_scratch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payout_table = {"🍒": 3, "🍋": 4, "⭐": 6, "💎": 15, "🔔": 25}
         win = amount * payout_table[card[0]]
         update_balance(u.id, win)
-        await update.message.reply_text(f"🎫 [ {card_text} ] — JACKPOT MATCH! You won ${win}!")
+        await update.message.reply_text(game_result_msg(
+            True, [f"🎫 Card: {card_text}"], amount, win
+        ), quote=True)
     else:
-        await update.message.reply_text(f"🎫 [ {card_text} ] — No match. You lost ${amount}.")
+        await update.message.reply_text(game_result_msg(
+            False, [f"🎫 Card: {card_text}"], amount
+        ), quote=True)
 
 async def cmd_propose(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /propose (reply) — sends a marriage proposal that target must /accept within 60s """
@@ -786,16 +821,16 @@ async def cmd_propose(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     target = await get_target(update)
     if not target:
-        await update.message.reply_text("↩️ Reply to the user you want to propose to.")
+        await update.message.reply_text("↩️ Reply to the user you want to propose to.", quote=True)
         return
     if target.id == u.id:
-        await update.message.reply_text("You can't marry yourself 😂")
+        await update.message.reply_text("You can't marry yourself 😂", quote=True)
         return
     if get_marriage(u.id):
-        await update.message.reply_text("💍 You're already married! Use /divorce first.")
+        await update.message.reply_text("💍 You're already married! Use /divorce first.", quote=True)
         return
     if get_marriage(target.id):
-        await update.message.reply_text(f"{target.first_name} is already married.")
+        await update.message.reply_text(f"{target.first_name} is already married.", quote=True)
         return
     _pending_proposals[target.id] = (u.id, u.first_name, time.time() + 60)
     lines = [
@@ -804,8 +839,7 @@ async def cmd_propose(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💖 {u.first_name} popped the question to {target.first_name}!",
     ]
     await update.message.reply_text(
-        f"{random.choice(lines)}\n{target.first_name}, reply with /accept within 60s to say yes!"
-    )
+        f"{random.choice(lines)}\n{target.first_name}, reply with /accept within 60s to say yes!", quote=True)
 
 async def cmd_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -813,7 +847,7 @@ async def cmd_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     pending = _pending_proposals.get(u.id)
     if not pending or time.time() > pending[2]:
-        await update.message.reply_text("💔 No active proposal for you (or it expired).")
+        await update.message.reply_text("💔 No active proposal for you (or it expired).", quote=True)
         _pending_proposals.pop(u.id, None)
         return
     proposer_id, proposer_name, _ = pending
@@ -823,8 +857,7 @@ async def cmd_accept(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_marriage(u.id, proposer_id, proposer_name)
     del _pending_proposals[u.id]
     await update.message.reply_text(
-        f"💒 Congratulations! {proposer_name} and {u.first_name} are now married! 🎉👰🤵"
-    )
+        f"💒 Congratulations! {proposer_name} and {u.first_name} are now married! 🎉👰🤵", quote=True)
 
 async def cmd_divorce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -832,11 +865,11 @@ async def cmd_divorce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     m = get_marriage(u.id)
     if not m:
-        await update.message.reply_text("💔 You're not married.")
+        await update.message.reply_text("💔 You're not married.", quote=True)
         return
     clear_marriage(u.id)
     clear_marriage(m["partner_id"])
-    await update.message.reply_text(f"💔 {u.first_name} and {m['partner_name']} are now divorced.")
+    await update.message.reply_text(f"💔 {u.first_name} and {m['partner_name']} are now divorced.", quote=True)
 
 async def cmd_couple(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -844,12 +877,11 @@ async def cmd_couple(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     m = get_marriage(u.id)
     if not m:
-        await update.message.reply_text("💔 You're not married. Use /propose (reply) to start a relationship!")
+        await update.message.reply_text("💔 You're not married. Use /propose (reply) to start a relationship!", quote=True)
         return
     days = int((time.time() - m["married_at"]) // 86400)
     await update.message.reply_text(
-        f"💞 {u.first_name} is married to {m['partner_name']} ({days} day{'s' if days != 1 else ''} together)"
-    )
+        f"💞 {u.first_name} is married to {m['partner_name']} ({days} day{'s' if days != 1 else ''} together)", quote=True)
 
 def _cosmetic_command(verb, emoji_lines):
     async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -858,10 +890,10 @@ def _cosmetic_command(verb, emoji_lines):
         u = update.effective_user
         target = await get_target(update)
         if not target:
-            await update.message.reply_text(f"↩️ Reply to the user you want to {verb}.")
+            await update.message.reply_text(f"↩️ Reply to the user you want to {verb}.", quote=True)
             return
         line = random.choice(emoji_lines).format(u=u.first_name, t=target.first_name)
-        await update.message.reply_text(line)
+        await update.message.reply_text(line, quote=True)
     return handler
 
 cmd_kiss = _cosmetic_command("kiss", [
@@ -900,7 +932,7 @@ async def cmd_toprich(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "💰 Top 10 Richest:\n" + "\n".join(
         f"{i+1}. {r['username'] or 'Unknown'} — ${r['balance']}" for i, r in enumerate(rows)
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, quote=True)
 
 async def cmd_topkill(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -911,7 +943,7 @@ async def cmd_topkill(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "💀 Top 10 Killers:\n" + "\n".join(
         f"{i+1}. {r['username'] or 'Unknown'} — {r['kills']} kills" for i, r in enumerate(rows)
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, quote=True)
 
 # ---------------------------------------------------------------------------
 # HIDDEN ADMIN COMMANDS
@@ -934,7 +966,7 @@ async def cmd_addcoins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount = int(context.args[0])
     get_user(target.id, target.username)
     update_balance(target.id, amount)
-    await update.message.reply_text(f"✅ Adjusted {target.first_name}'s balance by {amount}.")
+    await update.message.reply_text(f"✅ Adjusted {target.first_name}'s balance by {amount}.", quote=True)
 
 @admin_only
 async def cmd_setbal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -942,7 +974,7 @@ async def cmd_setbal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not target or not context.args or not context.args[0].isdigit():
         return
     set_field(target.id, "balance", int(context.args[0]))
-    await update.message.reply_text(f"✅ Set {target.first_name}'s balance to {context.args[0]}.")
+    await update.message.reply_text(f"✅ Set {target.first_name}'s balance to {context.args[0]}.", quote=True)
 
 @admin_only
 async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -950,7 +982,7 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not target:
         return
     set_field(target.id, "banned", 1)
-    await update.message.reply_text(f"🚫 {target.first_name} banned from economy.")
+    await update.message.reply_text(f"🚫 {target.first_name} banned from economy.", quote=True)
 
 @admin_only
 async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -958,7 +990,7 @@ async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not target:
         return
     set_field(target.id, "banned", 0)
-    await update.message.reply_text(f"✅ {target.first_name} unbanned.")
+    await update.message.reply_text(f"✅ {target.first_name} unbanned.", quote=True)
 
 @admin_only
 async def cmd_resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -969,7 +1001,7 @@ async def cmd_resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.execute("DELETE FROM users WHERE user_id=?", (target.id,))
     conn.commit()
     conn.close()
-    await update.message.reply_text(f"♻️ Reset {target.first_name}'s data.")
+    await update.message.reply_text(f"♻️ Reset {target.first_name}'s data.", quote=True)
 
 @admin_only
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -986,31 +1018,29 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent += 1
         except Exception:
             pass
-    await update.message.reply_text(f"✅ Broadcast sent to {sent} users.")
+    await update.message.reply_text(f"✅ Broadcast sent to {sent} users.", quote=True)
 
 @admin_only
 async def cmd_spamtoggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args or context.args[0].lower() not in ("on", "off"):
-        await update.message.reply_text("ℹ️ Usage: /spamtoggle on|off")
+        await update.message.reply_text("ℹ️ Usage: /spamtoggle on|off", quote=True)
         return
     set_setting("spam_protection", context.args[0].lower())
-    await update.message.reply_text(f"✅ Spam protection turned {context.args[0].upper()}.")
+    await update.message.reply_text(f"✅ Spam protection turned {context.args[0].upper()}.", quote=True)
 
 @admin_only
 async def cmd_spamset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /spamset <window_secs> <max_msgs> <mute_secs> """
     if len(context.args) < 3 or not all(a.isdigit() for a in context.args[:3]):
         await update.message.reply_text(
-            "ℹ️ Usage: /spamset <window_seconds> <max_messages> <mute_seconds>"
-        )
+            "ℹ️ Usage: /spamset <window_seconds> <max_messages> <mute_seconds>", quote=True)
         return
     window, max_msgs, mute_secs = (int(x) for x in context.args[:3])
     set_setting("spam_window", window)
     set_setting("spam_max_msgs", max_msgs)
     set_setting("spam_mute_secs", mute_secs)
     await update.message.reply_text(
-        f"✅ Spam settings updated: {max_msgs} msgs / {window}s window → mute {mute_secs}s"
-    )
+        f"✅ Spam settings updated: {max_msgs} msgs / {window}s window → mute {mute_secs}s", quote=True)
 
 @admin_only
 async def cmd_spamstatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1020,24 +1050,24 @@ async def cmd_spamstatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mute_secs = get_setting("spam_mute_secs", SPAM_MUTE_SECONDS)
     await update.message.reply_text(
         f"🛡️ Spam protection: {status.upper()}\n"
-        f"Window: {window}s | Max msgs: {max_msgs} | Mute: {mute_secs}s"
+        f"Window: {window}s | Max msgs: {max_msgs} | Mute: {mute_secs}s", quote=True)
+
+@admin_only
+async def cmd_adminhelp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🔐 Hidden Admin Commands:\n\n"
+        "/addcoins (reply) <amount> — add/remove coins from a user\n"
+        "/setbal (reply) <amount> — set a user's exact balance\n"
+        "/ban (reply) — ban user from economy\n"
+        "/unban (reply) — unban user\n"
+        "/resetuser (reply) — wipe a user's data completely\n"
+        "/broadcast <message> — DM all known users\n"
+        "/spamtoggle on|off — toggle spam protection\n"
+        "/spamset <window> <max> <mute> — configure spam protection timing\n"
+        "/spamstatus — check current spam protection settings\n"
+        "/adminhelp — this list (admin-only, hidden from everyone else)"
     )
-
-
-    if not context.args:
-        return
-    text = " ".join(context.args)
-    conn = db()
-    ids = [r["user_id"] for r in conn.execute("SELECT user_id FROM users").fetchall()]
-    conn.close()
-    sent = 0
-    for uid in ids:
-        try:
-            await context.bot.send_message(uid, f"📢 {text}")
-            sent += 1
-        except Exception:
-            pass
-    await update.message.reply_text(f"✅ Broadcast sent to {sent} users.")
+    await update.message.reply_text(text, quote=True)
 
 # ---------------------------------------------------------------------------
 # HELP (admin commands intentionally excluded)
@@ -1085,7 +1115,7 @@ async def cmd_start_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/toprich — top 10 richest\n"
         "/topkill — top 10 killers"
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, quote=True)
 
 # ---------------------------------------------------------------------------
 # MAIN
@@ -1095,8 +1125,7 @@ async def error_handler(update, context):
     try:
         if isinstance(update, Update) and update.effective_message:
             await update.effective_message.reply_text(
-                "⚠️ Something went wrong running that command. The error has been logged."
-            )
+                "⚠️ Something went wrong running that command. The error has been logged.", quote=True)
     except Exception:
         pass
 
@@ -1167,6 +1196,7 @@ def main():
     app.add_handler(CommandHandler("spamtoggle", cmd_spamtoggle))
     app.add_handler(CommandHandler("spamset", cmd_spamset))
     app.add_handler(CommandHandler("spamstatus", cmd_spamstatus))
+    app.add_handler(CommandHandler("adminhelp", cmd_adminhelp))
 
     app.add_error_handler(error_handler)
 
