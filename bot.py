@@ -10,6 +10,7 @@ Stack: python-telegram-bot v20.7, SQLite (matches your LunarNIXbot setup)
 """
 
 import os
+import asyncio
 import sqlite3
 import time
 import random
@@ -17,10 +18,11 @@ import logging
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import DiceEmoji
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes, MessageHandler, filters
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes,
+    MessageHandler, filters
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -44,17 +46,27 @@ SPAM_WINDOW_SECONDS = 8
 SPAM_MAX_MESSAGES = 5
 SPAM_MUTE_SECONDS = 60
 
-DB_PATH = "lunar_economy.db"
+DB_PATH = "players.db"        # player balances, stats, marriages — NEVER wiped on redeploy
+CONFIG_DB_PATH = "lunar_economy.db"  # settings + message templates
 
 # ---------------------------------------------------------------------------
 # DB SETUP
 # ---------------------------------------------------------------------------
 def db():
+    """ Player data (users, marriages) — separate file so admin redeploys
+    or config changes NEVER touch player balances/stats. """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
+def db_config():
+    """ Bot config: settings + message templates — separate file from player data. """
+    conn = sqlite3.connect(CONFIG_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def init_db():
+    # --- players.db: player data only, never wiped by config/bot updates ---
     conn = db()
     conn.execute("""
     CREATE TABLE IF NOT EXISTS users (
@@ -66,15 +78,9 @@ def init_db():
         protected_until INTEGER DEFAULT 0,
         last_daily INTEGER DEFAULT 0,
         streak INTEGER DEFAULT 0,
-        last_work INTEGER DEFAULT 0,
         title TEXT DEFAULT '',
         inventory TEXT DEFAULT '',
         banned INTEGER DEFAULT 0
-    )""")
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
     )""")
     conn.execute("""
     CREATE TABLE IF NOT EXISTS marriages (
@@ -86,14 +92,29 @@ def init_db():
     conn.commit()
     conn.close()
 
+    # --- lunar_economy.db: bot config (settings + message templates) ---
+    conn = db_config()
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )""")
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS templates (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )""")
+    conn.commit()
+    conn.close()
+
 def get_setting(key, default=None):
-    conn = db()
+    conn = db_config()
     row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     conn.close()
     return row["value"] if row else default
 
 def set_setting(key, value):
-    conn = db()
+    conn = db_config()
     conn.execute(
         "INSERT INTO settings (key, value) VALUES (?,?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -101,6 +122,92 @@ def set_setting(key, value):
     )
     conn.commit()
     conn.close()
+
+# ---------------------------------------------------------------------------
+# EDITABLE MESSAGE TEMPLATES — admin-panel-editable text for every command.
+# DEFAULT_TEMPLATES holds the fallback text. Admins override via /adminpanel,
+# stored in the `templates` DB table. safe_format() guarantees a bad edit
+# (e.g. a broken {placeholder}) NEVER crashes the bot — it just falls back
+# to the default text for that one message instead of raising an exception.
+# ---------------------------------------------------------------------------
+DEFAULT_TEMPLATES = {
+    "welcome": (
+        "🌙 Welcome to Lunar Economy 🔥!\n"
+        "Yaha coins kamao, loot maro, kill karo aur jeeto!"
+    ),
+    "daily_success": (
+        "💰 +${total} daily coins claimed! (base ${base} + streak bonus ${bonus})\n"
+        "🔥 Streak: {streak} day(s)"
+    ),
+    "give_success": "🎁 {sender} gifted ${net} to {receiver} (tax: ${tax})",
+    "kill_success": "💀 {target} has been killed for {hours}h!",
+    "rob_success": "🥷 {robber} robbed ${amount} from {target}!",
+    "revive_success": "❤️ {target} has been revived by {reviver}!",
+    "protect_success": "🛡️ You are protected for {hours}h!",
+    "shop_purchase": "✅ Purchased {item}! Use /settitle to equip a title item.",
+    "win_footer": "🤑 Jeet: +${win}\nLucky ho {name}! 🍀🔥",
+    "lose_footer": "😔 Nuksan: -${amount}\nAgli baar sahi lagana {name}! 💸",
+    "win_headers": "💸 SAHI! YOU WON! 💸|🔥 JEET GAYE! 🔥|🎉 BOOM! WINNER! 🎉|💰 MAAL MIL GAYA! 💰",
+    "lose_headers": "💀 GALAT! HAARA! 💀|😵 BURA LUCK! 😵|📉 NUKSAN HO GAYA! 📉|🥀 KHO GAYA! 🥀",
+}
+
+# Human-readable labels + which placeholders each template accepts (for the panel)
+TEMPLATE_INFO = {
+    "welcome": ("Welcome message (/start)", []),
+    "daily_success": ("Daily claim success", ["total", "base", "bonus", "streak"]),
+    "give_success": ("Give/gift success", ["sender", "receiver", "net", "tax"]),
+    "kill_success": ("Kill success", ["target", "hours"]),
+    "rob_success": ("Rob success", ["robber", "target", "amount"]),
+    "revive_success": ("Revive success", ["target", "reviver"]),
+    "protect_success": ("Protect success", ["hours"]),
+    "shop_purchase": ("Shop purchase success", ["item"]),
+    "win_footer": ("Game WIN footer (all games)", ["win", "name"]),
+    "lose_footer": ("Game LOSE footer (all games)", ["amount", "name"]),
+    "win_headers": ("Game WIN headers, '|' separated", []),
+    "lose_headers": ("Game LOSE headers, '|' separated", []),
+}
+
+def get_template(key):
+    conn = db_config()
+    row = conn.execute("SELECT value FROM templates WHERE key=?", (key,)).fetchone()
+    conn.close()
+    if row and row["value"]:
+        return row["value"]
+    return DEFAULT_TEMPLATES.get(key, "")
+
+def set_template(key, value):
+    conn = db_config()
+    conn.execute(
+        "INSERT INTO templates (key, value) VALUES (?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value)
+    )
+    conn.commit()
+    conn.close()
+
+def reset_template(key):
+    conn = db_config()
+    conn.execute("DELETE FROM templates WHERE key=?", (key,))
+    conn.commit()
+    conn.close()
+
+def safe_format(key, **kwargs):
+    """ Renders a template by key with kwargs. If the stored/custom template
+    is broken (bad braces, missing placeholder, etc.) this NEVER raises —
+    it silently falls back to the hardcoded default template instead. """
+    template = get_template(key)
+    try:
+        return template.format(**kwargs)
+    except Exception as e:
+        log.warning(f"Template '{key}' failed to render ({e}), using default.")
+        try:
+            return DEFAULT_TEMPLATES.get(key, "").format(**kwargs)
+        except Exception:
+            return DEFAULT_TEMPLATES.get(key, "")
+
+# Pending admin states (in-memory, per admin user id)
+_pending_template_edit = {}  # admin_id -> template_key currently being edited
+_pending_broadcast = set()   # admin_ids waiting to send their next message as a broadcast
 
 def get_user(user_id, username=None):
     conn = db()
@@ -161,15 +268,29 @@ _msg_log = defaultdict(lambda: deque(maxlen=SPAM_MAX_MESSAGES))
 _muted_until = {}
 _lottery_pools = {}  # chat_id -> list of (user_id, name, amount)
 _pending_proposals = {}  # target_user_id -> (proposer_id, proposer_name, expires_at)
+_last_msg_seen = {}  # user_id -> (message_text, timestamp) for duplicate dedup
+DEDUP_WINDOW_SECONDS = 3  # identical messages from the same user within this window count once
 
 async def antispam_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if get_setting("spam_protection", "on") != "on":
+    user = update.effective_user
+    if not user:
         return True
 
-    user = update.effective_user
-    if not user or user.id in ADMIN_IDS:
-        return True
+    # --- Duplicate-message dedup: if the same user fires the exact same
+    # command multiple times almost simultaneously (double-tap, multi-device,
+    # client retry), only the first one is processed. Applies even to admins.
     now = time.time()
+    msg_text = update.effective_message.text if update.effective_message else None
+    if msg_text:
+        last = _last_msg_seen.get(user.id)
+        if last and last[0] == msg_text and (now - last[1]) < DEDUP_WINDOW_SECONDS:
+            return False
+        _last_msg_seen[user.id] = (msg_text, now)
+
+    if get_setting("spam_protection", "on") != "on":
+        return True
+    if user.id in ADMIN_IDS:
+        return True
 
     window = int(get_setting("spam_window", SPAM_WINDOW_SECONDS))
     max_msgs = int(get_setting("spam_max_msgs", SPAM_MAX_MESSAGES))
@@ -250,8 +371,9 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_field(u.id, "last_daily", now)
     set_field(u.id, "streak", streak)
     await update.message.reply_text(
-        f"💰 +${total} daily coins claimed! (base ${DAILY_AMOUNT} + streak bonus ${bonus})\n"
-        f"🔥 Streak: {streak} day{'s' if streak != 1 else ''}", quote=True)
+        safe_format("daily_success", total=total, base=DAILY_AMOUNT, bonus=bonus, streak=streak),
+        quote=True
+    )
 
 async def cmd_bal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -288,44 +410,19 @@ async def cmd_give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_balance(u.id, -amount)
     update_balance(target.id, net)
     await update.message.reply_text(
-        f"🎁 {u.first_name} gifted ${net} to {target.first_name} (tax: ${tax})", quote=True)
+        safe_format("give_success", sender=u.first_name, receiver=target.first_name, net=net, tax=tax),
+        quote=True
+    )
 
 # ---------------------------------------------------------------------------
 # GAMES — using Telegram's real emoji dice (send_dice) for provably-visible RNG
 # ---------------------------------------------------------------------------
-WORK_COOLDOWN = 1800  # 30 minutes
-WORK_MIN, WORK_MAX = 50, 250
-WORK_LINES = [
-    "delivered pizzas across town 🍕",
-    "fixed a broken VPS at 3am 🖥️",
-    "walked someone's dog 🐕",
-    "sold lemonade on the street 🍋",
-    "did freelance coding gigs 💻",
-    "busked with a guitar downtown 🎸",
-]
-
 SHOP_ITEMS = {
     "vip": {"price": 5000, "label": "👑 VIP Title"},
     "ninja": {"price": 3000, "label": "🥷 Ninja Title"},
     "lucky_charm": {"price": 2000, "label": "🍀 Lucky Charm (cosmetic)"},
     "crown": {"price": 8000, "label": "👑 Golden Crown (cosmetic)"},
 }
-
-async def cmd_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await spam_guard(update, context):
-        return
-    u = update.effective_user
-    row = get_user(u.id, u.username)
-    now = int(time.time())
-    if now - row["last_work"] < WORK_COOLDOWN:
-        remaining = WORK_COOLDOWN - (now - row["last_work"])
-        m, s = remaining // 60, remaining % 60
-        await update.message.reply_text(f"⏳ Tired from last job. Rest {m}m {s}s more.", quote=True)
-        return
-    earned = random.randint(WORK_MIN, WORK_MAX)
-    update_balance(u.id, earned)
-    set_field(u.id, "last_work", now)
-    await update.message.reply_text(f"🛠️ You {random.choice(WORK_LINES)} and earned ${earned}!", quote=True)
 
 async def cmd_shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -355,7 +452,10 @@ async def cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     inv.add(key)
     update_balance(u.id, -item["price"])
     set_field(u.id, "inventory", ",".join(inv))
-    await update.message.reply_text(f"✅ Purchased {item['label']}! Use /settitle {key} to equip a title item.", quote=True)
+    await update.message.reply_text(
+        safe_format("shop_purchase", item=item["label"]),
+        quote=True
+    )
 
 async def cmd_settitle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -393,18 +493,24 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, quote=True)
 
 
-WIN_HEADERS = ["💸 SAHI! YOU WON! 💸", "🔥 JEET GAYE! 🔥", "🎉 BOOM! WINNER! 🎉", "💰 MAAL MIL GAYA! 💰"]
-LOSE_HEADERS = ["💀 GALAT! HAARA! 💀", "😵 BURA LUCK! 😵", "📉 NUKSAN HO GAYA! 📉", "🥀 KHO GAYA! 🥀"]
 DIVIDER = "━━━━━━━━━━━━━━━━━━━━━"
 
-def game_result_msg(won: bool, lines: list, amount: int, win: int = 0):
-    header = random.choice(WIN_HEADERS if won else LOSE_HEADERS)
+def game_result_msg(won: bool, lines: list, amount: int, win: int = 0, *, name: str):
+    headers_raw = get_template("win_headers" if won else "lose_headers")
+    options = [h.strip() for h in headers_raw.split("|") if h.strip()]
+    if not options:
+        options = [DEFAULT_TEMPLATES["win_headers" if won else "lose_headers"]]
+    header = random.choice(options)
     body = "\n".join(lines)
-    if won:
-        footer = f"🤑 Jeet: +${win}\nLucky ho Gaming! 🍀🔥"
-    else:
-        footer = f"😔 Nuksan: -${amount}\nAgli baar sahi lagana Gaming! 💸"
+    footer = safe_format("win_footer", win=win, name=name) if won else safe_format("lose_footer", amount=amount, name=name)
     return f"{header}\n{DIVIDER}\n{body}\n\n{footer}"
+
+async def reply_game_result(update: Update, won: bool, lines: list, amount: int, win: int = 0, *, name: str):
+    """ Sends the game result text, then the configured win/lose sticker (if any). """
+    await update.message.reply_text(
+        game_result_msg(won, lines, amount, win, name=name), quote=True
+    )
+    await send_outcome_sticker(update, won)
 
 
 async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -429,13 +535,11 @@ async def cmd_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result == guess:
         win = amount * 5
         update_balance(u.id, win)
-        await update.message.reply_text(game_result_msg(
-            True, [f"🎲 Result: {result}", f"✅ Tera pick: {guess}"], amount, win
-        ), quote=True)
+        await reply_game_result(update, 
+            True, [f"🎲 Result: {result}", f"✅ Tera pick: {guess}"], amount, win, name=u.first_name)
     else:
-        await update.message.reply_text(game_result_msg(
-            False, [f"🎲 Result: {result}", f"❌ Tera pick: {guess}"], amount
-        ), quote=True)
+        await reply_game_result(update, 
+            False, [f"🎲 Result: {result}", f"❌ Tera pick: {guess}"], amount, name=u.first_name)
 
 async def cmd_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /slots <amount> — uses Telegram slot machine emoji """
@@ -456,19 +560,16 @@ async def cmd_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if value == 64:
         win = amount * 10
         update_balance(u.id, win)
-        await update.message.reply_text(game_result_msg(
-            True, ["🎰 777 — JACKPOT!"], amount, win
-        ), quote=True)
+        await reply_game_result(update, 
+            True, ["🎰 777 — JACKPOT!"], amount, win, name=u.first_name)
     elif value in (1, 22, 43):  # any matching triple (bar/grape/lemon triples in TG's table)
         win = amount * 3
         update_balance(u.id, win)
-        await update.message.reply_text(game_result_msg(
-            True, ["🎰 Triple Match!"], amount, win
-        ), quote=True)
+        await reply_game_result(update, 
+            True, ["🎰 Triple Match!"], amount, win, name=u.first_name)
     else:
-        await update.message.reply_text(game_result_msg(
-            False, ["🎰 No match."], amount
-        ), quote=True)
+        await reply_game_result(update, 
+            False, ["🎰 No match."], amount, name=u.first_name)
 
 async def cmd_flip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /flip <amount> <h/t> — uses Telegram's basketball emoji dice.
@@ -502,13 +603,11 @@ async def cmd_flip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result == pick:
         win = amount * 2
         update_balance(u.id, win)
-        await update.message.reply_text(game_result_msg(
-            True, [f"🏀 Result: {result_emoji}", f"✅ Tera pick: {pick_emoji}"], amount, win
-        ), quote=True)
+        await reply_game_result(update, 
+            True, [f"🏀 Result: {result_emoji}", f"✅ Tera pick: {pick_emoji}"], amount, win, name=u.first_name)
     else:
-        await update.message.reply_text(game_result_msg(
-            False, [f"🏀 Result: {result_emoji}", f"❌ Tera pick: {pick_emoji}"], amount
-        ), quote=True)
+        await reply_game_result(update, 
+            False, [f"🏀 Result: {result_emoji}", f"❌ Tera pick: {pick_emoji}"], amount, name=u.first_name)
 
 async def cmd_roulette(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /roulette <amount> — uses Telegram dart emoji, bullseye = 35x """
@@ -529,13 +628,11 @@ async def cmd_roulette(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if value == 6:
         win = amount * 35
         update_balance(u.id, win)
-        await update.message.reply_text(game_result_msg(
-            True, ["🎯 BULLSEYE!"], amount, win
-        ), quote=True)
+        await reply_game_result(update, 
+            True, ["🎯 BULLSEYE!"], amount, win, name=u.first_name)
     else:
-        await update.message.reply_text(game_result_msg(
-            False, ["🎯 Missed center."], amount
-        ), quote=True)
+        await reply_game_result(update, 
+            False, ["🎯 Missed center."], amount, name=u.first_name)
 
 async def cmd_color(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /c <amount> — uses Telegram bowling emoji mapped to 4 colors """
@@ -563,13 +660,11 @@ async def cmd_color(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if mapped == pick:
         win = amount * 4
         update_balance(u.id, win)
-        await update.message.reply_text(game_result_msg(
-            True, [f"🎨 Result: {mapped.upper()}", f"✅ Tera pick: {pick.upper()}"], amount, win
-        ), quote=True)
+        await reply_game_result(update, 
+            True, [f"🎨 Result: {mapped.upper()}", f"✅ Tera pick: {pick.upper()}"], amount, win, name=u.first_name)
     else:
-        await update.message.reply_text(game_result_msg(
-            False, [f"🎨 Result: {mapped.upper()}", f"❌ Tera pick: {pick.upper()}"], amount
-        ), quote=True)
+        await reply_game_result(update, 
+            False, [f"🎨 Result: {mapped.upper()}", f"❌ Tera pick: {pick.upper()}"], amount, name=u.first_name)
 
 # ---------------------------------------------------------------------------
 # PLAYER INTERACTION COMMANDS
@@ -589,7 +684,10 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE):
     until = int(time.time()) + KILL_HOURS * 3600
     set_field(target.id, "dead_until", until)
     set_field(u.id, "kills", get_user(u.id)["kills"] + 1)
-    await update.message.reply_text(f"💀 {target.first_name} has been killed for {KILL_HOURS}h!", quote=True)
+    await update.message.reply_text(
+        safe_format("kill_success", target=target.first_name, hours=KILL_HOURS),
+        quote=True
+    )
 
 async def cmd_revive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -605,7 +703,10 @@ async def cmd_revive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     update_balance(u.id, -REVIVE_COST)
     set_field(target.id, "dead_until", 0)
-    await update.message.reply_text(f"❤️ {target.first_name} has been revived by {u.first_name}!", quote=True)
+    await update.message.reply_text(
+        safe_format("revive_success", target=target.first_name, reviver=u.first_name),
+        quote=True
+    )
 
 async def cmd_rob(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -625,7 +726,10 @@ async def cmd_rob(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stolen = int(trow["balance"] * ROB_PERCENT)
     update_balance(target.id, -stolen)
     update_balance(u.id, stolen)
-    await update.message.reply_text(f"🥷 {u.first_name} robbed ${stolen} from {target.first_name}!", quote=True)
+    await update.message.reply_text(
+        safe_format("rob_success", robber=u.first_name, target=target.first_name, amount=stolen),
+        quote=True
+    )
 
 async def cmd_protect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
@@ -633,7 +737,10 @@ async def cmd_protect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     until = int(time.time()) + PROTECT_HOURS * 3600
     set_field(u.id, "protected_until", until)
-    await update.message.reply_text(f"🛡️ You are protected for {PROTECT_HOURS}h!", quote=True)
+    await update.message.reply_text(
+        safe_format("protect_success", hours=PROTECT_HOURS),
+        quote=True
+    )
 
 async def cmd_duel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /duel <amount> (reply) — both wager, dice decides winner """
@@ -806,13 +913,11 @@ async def cmd_scratch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payout_table = {"🍒": 3, "🍋": 4, "⭐": 6, "💎": 15, "🔔": 25}
         win = amount * payout_table[card[0]]
         update_balance(u.id, win)
-        await update.message.reply_text(game_result_msg(
-            True, [f"🎫 Card: {card_text}"], amount, win
-        ), quote=True)
+        await reply_game_result(update, 
+            True, [f"🎫 Card: {card_text}"], amount, win, name=u.first_name)
     else:
-        await update.message.reply_text(game_result_msg(
-            False, [f"🎫 Card: {card_text}"], amount
-        ), quote=True)
+        await reply_game_result(update, 
+            False, [f"🎫 Card: {card_text}"], amount, name=u.first_name)
 
 async def cmd_propose(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ /propose (reply) — sends a marriage proposal that target must /accept within 60s """
@@ -1003,22 +1108,80 @@ async def cmd_resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     await update.message.reply_text(f"♻️ Reset {target.first_name}'s data.", quote=True)
 
+OWNER_ID = 7140576750  # only this exact ID can run /globalreset and /reset
+_pending_globalreset = set()  # owner_ids who confirmed intent, awaiting final confirmation
+
+def owner_only(func):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id != OWNER_ID:
+            return  # silently ignore, no trace in chat
+        return await func(update, context)
+    return wrapper
+
+@owner_only
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /reset (reply to a user) — wipes that single player's data. Owner-only. """
+    target = await get_target(update)
+    if not target:
+        await update.message.reply_text("ℹ️ Reply to the user you want to reset.", quote=True)
+        return
+    conn = db()
+    conn.execute("DELETE FROM users WHERE user_id=?", (target.id,))
+    conn.execute("DELETE FROM marriages WHERE user_id=? OR partner_id=?", (target.id, target.id))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text(f"♻️ Reset {target.first_name}'s data.", quote=True)
+
+@owner_only
+async def cmd_globalreset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /globalreset — wipes ALL player data. Owner-only, requires confirmation
+        by running /globalreset confirm within 30s to prevent accidental wipes. """
+    u = update.effective_user
+    if context.args and context.args[0].lower() == "confirm":
+        if u.id not in _pending_globalreset:
+            await update.message.reply_text(
+                "⚠️ No pending global reset. Run /globalreset first.", quote=True)
+            return
+        _pending_globalreset.discard(u.id)
+        conn = db()
+        conn.execute("DELETE FROM users")
+        conn.execute("DELETE FROM marriages")
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(
+            "💥 GLOBAL RESET COMPLETE. All player balances, stats, and marriages wiped.", quote=True)
+        return
+    _pending_globalreset.add(u.id)
+    await update.message.reply_text(
+        "⚠️ This will WIPE every player's coins, kills, streaks, titles, and marriages — "
+        "permanently, for everyone in the bot.\n\n"
+        "Send /globalreset confirm within 30s to proceed, or ignore to cancel.",
+        quote=True
+    )
+    asyncio.get_running_loop().call_later(30, _pending_globalreset.discard, u.id)
+
 @admin_only
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        return
-    text = " ".join(context.args)
-    conn = db()
-    ids = [r["user_id"] for r in conn.execute("SELECT user_id FROM users").fetchall()]
-    conn.close()
-    sent = 0
-    for uid in ids:
-        try:
-            await context.bot.send_message(uid, f"📢 {text}")
-            sent += 1
-        except Exception:
-            pass
-    await update.message.reply_text(f"✅ Broadcast sent to {sent} users.", quote=True)
+    """ /broadcast — admin sends this, then their VERY NEXT message
+        (text, photo, sticker, video, anything) is forwarded to every known
+        user. This lets you broadcast any message type, not just plain text. """
+    u = update.effective_user
+    _pending_broadcast.add(u.id)
+    await update.message.reply_text(
+        "📢 Broadcast mode armed. Send me the message you want to broadcast now "
+        "(text, photo, sticker, anything) — it will be forwarded to every user.\n"
+        "Send /cancelbroadcast to back out instead.",
+        quote=True
+    )
+
+@admin_only
+async def cmd_cancelbroadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    if u.id in _pending_broadcast:
+        _pending_broadcast.discard(u.id)
+        await update.message.reply_text("❎ Broadcast cancelled.", quote=True)
+    else:
+        await update.message.reply_text("No broadcast was pending.", quote=True)
 
 @admin_only
 async def cmd_spamtoggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1061,48 +1224,223 @@ async def cmd_adminhelp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/ban (reply) — ban user from economy\n"
         "/unban (reply) — unban user\n"
         "/resetuser (reply) — wipe a user's data completely\n"
-        "/broadcast <message> — DM all known users\n"
+        "/broadcast — then send your next message to forward it to everyone\n"
+        "/cancelbroadcast — cancel a pending broadcast\n"
         "/spamtoggle on|off — toggle spam protection\n"
         "/spamset <window> <max> <mute> — configure spam protection timing\n"
         "/spamstatus — check current spam protection settings\n"
-        "/adminhelp — this list (admin-only, hidden from everyone else)"
+        "/adminpanel — edit any bot message template live\n"
+        "/setwinsticker — capture a sticker to play on game wins\n"
+        "/setlosesticker — capture a sticker to play on game losses\n"
+        "/clearstickers — remove win/lose stickers\n"
+        "/adminhelp — this list (admin-only, hidden from everyone else)\n\n"
+        "👑 Owner-only (your ID only):\n"
+        "/reset (reply) — wipe a single player's data\n"
+        "/globalreset — wipe ALL player data (needs /globalreset confirm)"
     )
     await update.message.reply_text(text, quote=True)
 
 # ---------------------------------------------------------------------------
+# STICKER SUPPORT — admin sends a sticker (Telegram Premium stickers work
+# fine here too, since we just capture the file_id) to set the win/lose
+# sticker shown after every game result. /clearstickers turns it back off.
+# ---------------------------------------------------------------------------
+@admin_only
+async def cmd_setwinsticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _pending_sticker_capture[update.effective_user.id] = "win_sticker"
+    await update.message.reply_text(
+        "🎟️ Send the sticker you want to play on every game WIN (Premium stickers work too).",
+        quote=True
+    )
+
+@admin_only
+async def cmd_setlosesticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _pending_sticker_capture[update.effective_user.id] = "lose_sticker"
+    await update.message.reply_text(
+        "🎟️ Send the sticker you want to play on every game LOSS (Premium stickers work too).",
+        quote=True
+    )
+
+@admin_only
+async def cmd_clearstickers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    set_setting("win_sticker", "")
+    set_setting("lose_sticker", "")
+    await update.message.reply_text("✅ Win/lose stickers cleared.", quote=True)
+
+async def send_outcome_sticker(update: Update, won: bool):
+    """ Sends the configured win/lose sticker after a game message, if one is set. """
+    key = "win_sticker" if won else "lose_sticker"
+    file_id = get_setting(key, "")
+    if file_id:
+        try:
+            await update.message.reply_sticker(file_id)
+        except Exception as e:
+            log.warning(f"Failed to send {key}: {e}")
+
+# ---------------------------------------------------------------------------
+# ADMIN PANEL — inline-button UI to browse and edit every message template.
+# Flow: /adminpanel -> pick a template from the button list -> bot shows the
+# current text + placeholders -> admin sends plain text -> saved instantly.
+# Editing NEVER breaks the bot: safe_format() always falls back to the
+# hardcoded default if a saved template is malformed.
+# ---------------------------------------------------------------------------
+@admin_only
+async def cmd_adminpanel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = []
+    row = []
+    for key, (label, _) in TEMPLATE_INFO.items():
+        row.append(InlineKeyboardButton(label, callback_data=f"tpl:{key}"))
+        if len(row) == 1:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton("❌ Close panel", callback_data="tpl:close")])
+    await update.message.reply_text(
+        "🛠️ Admin Panel — tap a message to view/edit it:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+        quote=True
+    )
+
+async def callback_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    if user_id not in ADMIN_IDS:
+        await query.answer("Not authorized.", show_alert=False)
+        return
+    await query.answer()
+    data = query.data
+
+    if data == "tpl:close":
+        await query.edit_message_text("🛠️ Admin panel closed.")
+        return
+
+    if data.startswith("tpl:reset:"):
+        key = data.split(":", 2)[2]
+        reset_template(key)
+        await query.edit_message_text(f"♻️ Reset '{key}' to default:\n\n{get_template(key)}")
+        return
+
+    if data.startswith("tpl:"):
+        key = data.split(":", 1)[1]
+        if key not in TEMPLATE_INFO:
+            await query.edit_message_text("Unknown template.")
+            return
+        label, placeholders = TEMPLATE_INFO[key]
+        current = get_template(key)
+        ph_text = ("Placeholders you can use: " + ", ".join(f"{{{p}}}" for p in placeholders)) if placeholders else "No placeholders — plain text only."
+        _pending_template_edit[user_id] = key
+        reset_btn = InlineKeyboardMarkup([[
+            InlineKeyboardButton("♻️ Reset to default", callback_data=f"tpl:reset:{key}")
+        ]])
+        await query.edit_message_text(
+            f"✏️ Editing: {label}\n\n"
+            f"Current text:\n{current}\n\n"
+            f"{ph_text}\n\n"
+            f"Send your new text now as a normal message to save it.",
+            reply_markup=reset_btn
+        )
+
+_pending_sticker_capture = {}  # admin_id -> setting_key ("win_sticker" / "lose_sticker")
+
+# ---------------------------------------------------------------------------
+# UNIVERSAL ADMIN MESSAGE CATCHER — handles three states:
+# 1. Admin has a template edit pending -> save whatever text they send next
+# 2. Admin has a broadcast pending -> forward whatever they send next to all
+# 3. Admin has a sticker capture pending -> save the sticker's file_id so it
+#    can be auto-sent after game wins/losses (Telegram Premium stickers work
+#    fine here too — file_id capture works the same for any sticker).
+# Non-admins and admins with no pending state are ignored completely, so this
+# never interferes with normal commands or conversation.
+# ---------------------------------------------------------------------------
+async def admin_message_catcher(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        return
+    msg = update.effective_message
+    if not msg:
+        return
+
+    # 1. Template edit pending
+    if user.id in _pending_template_edit:
+        key = _pending_template_edit.pop(user.id)
+        if not msg.text:
+            await msg.reply_text("⚠️ Please send plain text for a template edit. Edit cancelled.")
+            return
+        set_template(key, msg.text)
+        await msg.reply_text(f"✅ Template '{key}' updated.")
+        return
+
+    # 2. Broadcast pending
+    if user.id in _pending_broadcast:
+        _pending_broadcast.discard(user.id)
+        conn = db()
+        ids = [r["user_id"] for r in conn.execute("SELECT user_id FROM users").fetchall()]
+        conn.close()
+        sent = 0
+        for uid in ids:
+            try:
+                await context.bot.forward_message(
+                    chat_id=uid,
+                    from_chat_id=msg.chat_id,
+                    message_id=msg.message_id
+                )
+                sent += 1
+            except Exception:
+                pass
+        await msg.reply_text(f"✅ Broadcast forwarded to {sent} users.")
+        return
+
+    # 3. Sticker capture pending
+    if user.id in _pending_sticker_capture:
+        key = _pending_sticker_capture.pop(user.id)
+        if not msg.sticker:
+            await msg.reply_text("⚠️ That wasn't a sticker. Capture cancelled — run the command again.")
+            return
+        set_setting(key, msg.sticker.file_id)
+        await msg.reply_text(f"✅ Sticker saved for {key.replace('_', ' ')}.")
+        return
+
+# ---------------------------------------------------------------------------
 # HELP (admin commands intentionally excluded)
 # ---------------------------------------------------------------------------
-async def cmd_start_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await spam_guard(update, context):
         return
     text = (
-        "🌙 Welcome to Lunar Economy 🔥!\n"
-        "Yaha coins kamao, loot maro, kill karo aur jeeto!\n\n"
-        "⭐ Coin Commands:\n"
+        get_template("welcome") + "\n\n"
+        "Type /help anytime to see the full list of commands."
+    )
+    await update.message.reply_text(text, quote=True)
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await spam_guard(update, context):
+        return
+    text = (
+        "📖 Lunar Economy — Command List\n\n"
+        "💰 Economy:\n"
         "/daily — daily $1000 coins (+streak bonus)\n"
         "/bal — balance + rank\n"
         "/give (reply) <amount> — gift coins (10% tax)\n"
-        "/work — earn coins (30 min cooldown)\n"
+        "/profile (reply optional) — view stats card\n\n"
+        "🛒 Shop:\n"
         "/shop — browse cosmetic items\n"
         "/buy <item> — purchase item\n"
-        "/settitle <item> — equip a purchased title\n"
-        "/profile (reply optional) — view stats card\n\n"
-        "🎮 Action Commands:\n"
+        "/settitle <item> — equip a purchased title\n\n"
+        "⚔️ PvP (player vs player):\n"
         "/kill (reply) — kill target for 12h\n"
         "/rob (reply) — steal 30% of target's coins\n"
-        "/protect — 24h protection\n"
+        "/protect — 24h protection from kill/rob\n"
         "/revive (reply) — revive a dead user ($300)\n"
-        "/duel <amount> (reply) — wager duel vs another player\n"
-        "/rps <amount> <rock|paper|scissors> (reply) — rock-paper-scissors wager\n"
-        "/slap (reply) — slap someone (just for fun)\n"
-        "/hug (reply) — hug someone (just for fun)\n\n"
-        "💕 Cosmetic / Relationship:\n"
-        "/kiss /pat /poke /highfive /cuddle /dance (reply) — fun interactions\n"
+        "/duel <amount> (reply) — wager duel, dice decides winner\n"
+        "/rps <amount> <rock|paper|scissors> (reply) — wager rock-paper-scissors\n\n"
+        "💕 Romance & Fun (no coins, just for fun):\n"
+        "/kiss /pat /poke /highfive /cuddle /dance /slap /hug (reply)\n"
         "/propose (reply) — propose marriage\n"
         "/accept — accept a pending proposal\n"
         "/divorce — end your marriage\n"
         "/couple — check your relationship status\n\n"
-        "🎲 Gaming:\n"
+        "🎰 Casino games:\n"
         "/bet <amount> <1-6> — dice (5x)\n"
         "/slots <amount> — slot machine (10x jackpot)\n"
         "/flip <amount> <h/t> — basketball flip (2x)\n"
@@ -1145,11 +1483,11 @@ def main():
         .build()
     )
 
-    app.add_handler(CommandHandler(["start", "help"], cmd_start_help))
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("daily", cmd_daily))
     app.add_handler(CommandHandler("bal", cmd_bal))
     app.add_handler(CommandHandler("give", cmd_give))
-    app.add_handler(CommandHandler("work", cmd_work))
     app.add_handler(CommandHandler("shop", cmd_shop))
     app.add_handler(CommandHandler("buy", cmd_buy))
     app.add_handler(CommandHandler("settitle", cmd_settitle))
@@ -1192,11 +1530,23 @@ def main():
     app.add_handler(CommandHandler("ban", cmd_ban))
     app.add_handler(CommandHandler("unban", cmd_unban))
     app.add_handler(CommandHandler("resetuser", cmd_resetuser))
+    app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("globalreset", cmd_globalreset))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
+    app.add_handler(CommandHandler("cancelbroadcast", cmd_cancelbroadcast))
     app.add_handler(CommandHandler("spamtoggle", cmd_spamtoggle))
     app.add_handler(CommandHandler("spamset", cmd_spamset))
     app.add_handler(CommandHandler("spamstatus", cmd_spamstatus))
     app.add_handler(CommandHandler("adminhelp", cmd_adminhelp))
+    app.add_handler(CommandHandler("adminpanel", cmd_adminpanel))
+    app.add_handler(CommandHandler("setwinsticker", cmd_setwinsticker))
+    app.add_handler(CommandHandler("setlosesticker", cmd_setlosesticker))
+    app.add_handler(CommandHandler("clearstickers", cmd_clearstickers))
+    app.add_handler(CallbackQueryHandler(callback_admin_panel, pattern=r"^tpl:"))
+    # Catches an admin's next message (text/photo/sticker/anything) when a
+    # template-edit or broadcast is pending. group=1 so it runs alongside
+    # command handlers without blocking them.
+    app.add_handler(MessageHandler(~filters.COMMAND, admin_message_catcher), group=1)
 
     app.add_error_handler(error_handler)
 
